@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Carnet Logement — Analyse IA</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🏠</div>
+    Carnet Logement
+  </div>
+</header>
+
+<!-- HERO -->
+<div class="hero">
+  <div class="hero-eyebrow">Analyse automatisée</div>
+  <h1>Détection Piscine &amp;<br>Panneaux Photovoltaïques</h1>
+  <p>Entrez une adresse, l'IA analyse les données disponibles et détermine la présence d'équipements déclarables.</p>
+</div>
+
+<!-- MAIN CARD -->
+<div class="main-card">
+  <div class="section-label">Nouvelle analyse</div>
+
+  <div class="address-form">
+    <div class="field-group">
+      <label for="addr">Adresse du bien immobilier</label>
+      <div class="autocomplete-wrapper">
+        <div class="input-wrap">
+          <svg class="pin" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
+            <circle cx="12" cy="9" r="2.5"/>
+          </svg>
+          <input type="text" id="addr"
+            placeholder="Ex: 12 Rue des Lilas, 34000 Montpellier"
+            autocomplete="off" spellcheck="false" />
+        </div>
+        <div class="autocomplete-dropdown hidden" id="ac-dropdown"></div>
+      </div>
+      <span class="field-error" id="addr-error"></span>
+      <span class="hint" id="addr-hint">Sélectionnez une adresse dans la liste pour valider</span>
+    </div>
+
+    <div class="field-group">
+      <label>Éléments à détecter</label>
+      <div class="options-row">
+        <label class="option-chip active-pool" id="chip-pool">
+          <input type="checkbox" id="chk-pool" checked> 🏊 Piscine
+        </label>
+        <label class="option-chip active-solar" id="chip-solar">
+          <input type="checkbox" id="chk-solar" checked> ☀️ Panneaux photovoltaïques
+        </label>
+      </div>
+    </div>
+
+    <button class="btn-analyse" id="btn-analyse" onclick="analyser()">
+      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+      </svg>
+      Lancer l'analyse IA
+    </button>
+  </div>
+
+  <!-- Loading -->
+  <div class="loading-state" id="loading">
+    <div class="spinner"></div>
+    <div class="loading-text">
+      <strong id="loading-msg">Analyse en cours…</strong>
+      <span id="loading-sub">L'IA interroge les données cadastrales et satellites</span>
+    </div>
+  </div>
+
+  <!-- Error -->
+  <div class="error-box" id="error-box">
+    ⚠️ <span id="error-text">Une erreur est survenue.</span>
+  </div>
+
+  <!-- Results -->
+  <div class="results-section" id="results">
+    <div class="results-header">
+      <div>
+        <div style="font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:.2rem">Résultats</div>
+        <div class="results-address" id="res-address"></div>
+      </div>
+      <div class="confidence-badge" id="res-confidence">Analyse complète</div>
+    </div>
+
+    <div class="detection-grid">
+      <div class="detection-card" id="card-pool">
+        <div class="dc-icon">🏊</div>
+        <div class="dc-title">Piscine</div>
+        <div class="dc-verdict" id="pool-verdict">—</div>
+        <div class="dc-reason" id="pool-reason"></div>
+      </div>
+      <div class="detection-card" id="card-solar">
+        <div class="dc-icon">☀️</div>
+        <div class="dc-title">Panneaux photovoltaïques</div>
+        <div class="dc-verdict" id="solar-verdict">—</div>
+        <div class="dc-reason" id="solar-reason"></div>
+      </div>
+    </div>
+
+    <div class="analysis-box">
+      <div class="ab-label">Analyse détaillée par l'IA</div>
+      <p id="analysis-text"></p>
+    </div>
+  </div>
+</div>
+
+<!-- HISTORY -->
+<div class="history-section" id="history-section" style="display:none">
+  <div class="history-title">Analyses récentes</div>
+  <div class="history-list" id="history-list"></div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <strong>Carnet Logement</strong> · Analyse propulsée par <strong>l'IA</strong><br>
+  <span style="font-size:.72rem;margin-top:.3rem;display:block">
+    Les résultats sont indicatifs et basés sur les données disponibles. Une vérification terrain peut être nécessaire.
+  </span>
+</footer>
+
+<script src="script.js"></script>
+</body>
+</html>

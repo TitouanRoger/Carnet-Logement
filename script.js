@@ -1,16 +1,6 @@
-// ── Chips toggle ──
-document.getElementById('chip-pool').addEventListener('click', function(e) {
-  const chk = document.getElementById('chk-pool');
-  chk.checked = !chk.checked;
-  this.className = 'option-chip' + (chk.checked ? ' active-pool' : '');
-  e.preventDefault();
-});
-document.getElementById('chip-solar').addEventListener('click', function(e) {
-  const chk = document.getElementById('chk-solar');
-  chk.checked = !chk.checked;
-  this.className = 'option-chip' + (chk.checked ? ' active-solar' : '');
-  e.preventDefault();
-});
+// ── Chips fixés ──
+document.getElementById('chip-pool').addEventListener('click', (e) => e.preventDefault());
+document.getElementById('chip-solar').addEventListener('click', (e) => e.preventDefault());
 
 // ── Autocomplete (API Adresse data.gouv.fr) ──
 const addrInput   = document.getElementById('addr');
@@ -18,8 +8,7 @@ const dropdown    = document.getElementById('ac-dropdown');
 const addrError   = document.getElementById('addr-error');
 const addrHint    = document.getElementById('addr-hint');
 
-// Validated address state
-let validatedAddress = null; // null = not validated, string = validated label
+let validatedAddress = null; 
 let acFocusIndex = -1;
 let acItems = [];
 let acDebounce = null;
@@ -32,307 +21,317 @@ function setAddressValid(label) {
   addrHint.style.color = 'var(--green)';
 }
 
-function resetValidation() {
+function setAddressInvalid(msg) {
   validatedAddress = null;
-  addrHint.textContent = 'Sélectionnez une adresse dans la liste pour valider';
-  addrHint.style.color = '';
-  addrInput.classList.remove('input-error');
-  addrError.classList.remove('visible');
-}
-
-function showError(msg) {
   addrInput.classList.add('input-error');
   addrError.textContent = msg;
   addrError.classList.add('visible');
+  addrHint.textContent = 'Veuillez sélectionner une adresse dans la liste';
+  addrHint.style.color = 'var(--muted)';
+}
+
+addrInput.addEventListener('input', function() {
+  const q = this.value.trim();
+  validatedAddress = null; 
+  addrHint.textContent = 'Sélectionnez l\'adresse exacte dans la liste';
+  addrHint.style.color = 'var(--muted)';
+  
+  if (q.length < 3) {
+    closeDropdown();
+    return;
+  }
+  
+  clearTimeout(acDebounce);
+  acDebounce = setTimeout(() => {
+    fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(q)}&limit=5`)
+      .then(res => res.json())
+      .then(json => {
+        acItems = json.features || [];
+        renderDropdown();
+      })
+      .catch(err => console.error(err));
+  }, 200);
+});
+
+function renderDropdown() {
+  dropdown.innerHTML = '';
+  acFocusIndex = -1;
+  if (acItems.length === 0) {
+    closeDropdown();
+    return;
+  }
+  acItems.forEach((item, index) => {
+    const div = document.createElement('div');
+    div.className = 'ac-item';
+    div.textContent = item.properties.label;
+    div.addEventListener('click', () => {
+      selectItem(index);
+    });
+    dropdown.appendChild(div);
+  });
+  dropdown.style.display = 'block';
+}
+
+function selectItem(index) {
+  if (index >= 0 && index < acItems.length) {
+    const item = acItems[index];
+    addrInput.value = item.properties.label;
+    setAddressValid(item.properties.label);
+    closeDropdown();
+  }
 }
 
 function closeDropdown() {
-  dropdown.classList.add('hidden');
+  dropdown.style.display = 'none';
   dropdown.innerHTML = '';
-  acFocusIndex = -1;
-  acItems = [];
 }
 
-function selectItem(feature) {
-  const label = feature.properties.label;
-  addrInput.value = label;
-  setAddressValid(label);
-  closeDropdown();
-}
-
-function renderDropdown(features) {
-  if (!features.length) {
-    dropdown.innerHTML = '<div class="ac-searching">Aucune adresse trouvée</div>';
-    dropdown.classList.remove('hidden');
-    return;
-  }
-  acItems = features;
-  acFocusIndex = -1;
-  dropdown.innerHTML = features.map((f, i) => {
-    const p = f.properties;
-    const pct = Math.round((p.score || 0) * 100);
-    const street = p.name || '';
-    const city   = [p.postcode, p.city].filter(Boolean).join(' ');
-    return `<div class="ac-item" data-idx="${i}">
-      <svg class="ac-pin" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-        <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
-        <circle cx="12" cy="9" r="2.5"/>
-      </svg>
-      <div>
-        <div class="ac-main">${street}</div>
-        <div class="ac-sub">${city}</div>
-      </div>
-      <div class="ac-score">${pct}%</div>
-    </div>`;
-  }).join('');
-  dropdown.classList.remove('hidden');
-
-  dropdown.querySelectorAll('.ac-item').forEach(el => {
-    el.addEventListener('mousedown', e => {
-      e.preventDefault();
-      selectItem(acItems[parseInt(el.dataset.idx)]);
-    });
-  });
-}
-
-async function fetchSuggestions(q) {
-  dropdown.classList.remove('hidden');
-  dropdown.innerHTML = '<div class="ac-searching"><div class="ac-mini-spin"></div>Recherche en cours…</div>';
-  try {
-    const url = `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(q)}&limit=6&type=housenumber`;
-    const res = await fetch(url);
-    const data = await res.json();
-    renderDropdown(data.features || []);
-  } catch {
-    closeDropdown();
-  }
-}
-
-addrInput.addEventListener('input', () => {
-  resetValidation();
-  clearTimeout(acDebounce);
-  const q = addrInput.value.trim();
-  if (q.length < 5) { closeDropdown(); return; }
-  acDebounce = setTimeout(() => fetchSuggestions(q), 280);
-});
-
-addrInput.addEventListener('keydown', e => {
-  if (dropdown.classList.contains('hidden')) {
-    if (e.key === 'Enter') analyser();
-    return;
-  }
+addrInput.addEventListener('keydown', function(e) {
   const items = dropdown.querySelectorAll('.ac-item');
+  if (!items.length) return;
+  
   if (e.key === 'ArrowDown') {
+    acFocusIndex++;
+    if (acFocusIndex >= items.length) acFocusIndex = 0;
+    setActive(items);
     e.preventDefault();
-    acFocusIndex = Math.min(acFocusIndex + 1, items.length - 1);
-    items.forEach((el, i) => el.classList.toggle('focused', i === acFocusIndex));
   } else if (e.key === 'ArrowUp') {
+    acFocusIndex--;
+    if (acFocusIndex < 0) acFocusIndex = items.length - 1;
+    setActive(items);
     e.preventDefault();
-    acFocusIndex = Math.max(acFocusIndex - 1, -1);
-    items.forEach((el, i) => el.classList.toggle('focused', i === acFocusIndex));
   } else if (e.key === 'Enter') {
-    e.preventDefault();
-    if (acFocusIndex >= 0 && acItems[acFocusIndex]) {
-      selectItem(acItems[acFocusIndex]);
-    } else {
-      closeDropdown();
-      analyser();
+    if (acFocusIndex > -1) {
+      selectItem(acFocusIndex);
+      e.preventDefault();
     }
-  } else if (e.key === 'Escape') {
+  }
+});
+
+function setActive(items) {
+  items.forEach(item => item.classList.remove('active'));
+  if (acFocusIndex > -1) items[acFocusIndex].classList.add('active');
+}
+
+document.addEventListener('click', function(e) {
+  if (e.target !== addrInput && e.target !== dropdown) {
     closeDropdown();
   }
 });
 
-addrInput.addEventListener('blur', () => {
-  setTimeout(closeDropdown, 180);
-});
+// ── Historique & Soumission ──
+let historyData = [];
+try {
+  const local = localStorage.getItem('cl_history');
+  if (local) historyData = JSON.parse(local);
+} catch(e) {}
 
-// ── History ──
-let history = JSON.parse(localStorage.getItem('cl_history') || '[]');
-renderHistory();
-
-function saveHistory(entry) {
-  history.unshift(entry);
-  if (history.length > 8) history = history.slice(0, 8);
-  localStorage.setItem('cl_history', JSON.stringify(history));
-  renderHistory();
+function saveHistory() {
+  localStorage.setItem('cl_history', JSON.stringify(historyData));
 }
 
 function renderHistory() {
-  const sec = document.getElementById('history-section');
-  const list = document.getElementById('history-list');
-  if (!history.length) { sec.style.display = 'none'; return; }
-  sec.style.display = 'block';
-  list.innerHTML = history.map((h, i) => `
-    <div class="history-item" onclick="reloadHistory(${i})">
-      <span class="history-addr">${h.address}</span>
-      <div class="history-badges">
-        ${h.pool  !== null ? `<span class="hbadge pool">${h.pool  ? '🏊 Oui' : '🏊 Non'}</span>` : ''}
-        ${h.solar !== null ? `<span class="hbadge solar">${h.solar ? '☀️ Oui' : '☀️ Non'}</span>` : ''}
-      </div>
-    </div>`).join('');
+  const container = document.getElementById('history-list');
+  const section = document.getElementById('history-section');
+  if (!container || !section) return;
+
+  container.innerHTML = '';
+  if (historyData.length === 0) {
+    section.style.display = 'none';
+    return;
+  }
+  section.style.display = 'block';
+
+  historyData.forEach(entry => {
+    const item = document.createElement('div');
+    item.className = 'history-item';
+    
+    let badgesHtml = '';
+    if (entry.pool) badgesHtml += '<span class="hbadge pool">🏊 Piscine</span>';
+    if (entry.solar) badgesHtml += '<span class="hbadge solar">☀️ Solaire</span>';
+    if (!entry.pool && !entry.solar) badgesHtml += '<span class="hbadge none">Aucun</span>';
+
+    item.innerHTML = `
+      <div class="history-addr">${entry.address}</div>
+      <div class="history-badges">${badgesHtml}</div>
+    `;
+    item.addEventListener('click', () => {
+      displayResults(entry);
+      document.querySelector('.main-card').scrollIntoView({ behavior: 'smooth' });
+    });
+    container.appendChild(item);
+  });
 }
 
-function reloadHistory(idx) {
-  const h = history[idx];
-  addrInput.value = h.address;
-  setAddressValid(h.address);
-  displayResults(h);
-}
+document.getElementById('analyzer-form').addEventListener('submit', handleSubmit);
 
-// ── Loading messages ──
-const loadingSteps = [
-  ['Géolocalisation de l\'adresse…',   'Correspondance cadastrale en cours'],
-  ['Interrogation des données INSEE…', 'Croisement des déclarations fiscales'],
-  ['Analyse par l\'IA…',    'Raisonnement sur les indices disponibles'],
-  ['Compilation des résultats…',       'Mise en forme de la réponse'],
-];
-let loadingTimer = null;
-
-function startLoadingAnim() {
-  let step = 0;
-  const msg = document.getElementById('loading-msg');
-  const sub = document.getElementById('loading-sub');
-  msg.textContent = loadingSteps[0][0];
-  sub.textContent = loadingSteps[0][1];
-  loadingTimer = setInterval(() => {
-    step = (step + 1) % loadingSteps.length;
-    msg.textContent = loadingSteps[step][0];
-    sub.textContent = loadingSteps[step][1];
-  }, 1800);
-}
-
-function stopLoadingAnim() { clearInterval(loadingTimer); }
-
-// ── Main analyse ──
-async function analyser() {
+async function handleSubmit(e) {
+  e.preventDefault();
+  
   if (!validatedAddress) {
-    showError('Veuillez sélectionner une adresse dans la liste de propositions.');
-    addrInput.focus();
+    setAddressInvalid("Veuillez choisir une adresse suggérée.");
     return;
   }
 
-  const addr = validatedAddress;
-  const wantPool  = document.getElementById('chk-pool').checked;
-  const wantSolar = document.getElementById('chk-solar').checked;
-  if (!wantPool && !wantSolar) {
-    alert('Veuillez sélectionner au moins un élément à détecter.');
-    return;
-  }
+  // Force la valeur à true indépendamment de l'état visuel du checkbox
+  const chkPool = true; 
+  const chkSolar = true;
 
-  const btn = document.getElementById('btn-analyse');
+  const btn = document.getElementById('submit-btn');
+  const loader = document.getElementById('loader');
+  const resultsArea = document.getElementById('results-area');
+
   btn.disabled = true;
-  document.getElementById('loading').classList.add('visible');
-  document.getElementById('results').classList.remove('visible');
-  document.getElementById('error-box').classList.remove('visible');
-  startLoadingAnim();
-
-  const items = [];
-  if (wantPool)  items.push('piscine');
-  if (wantSolar) items.push('panneaux photovoltaïques');
-
-  const prompt = `Tu es un expert en analyse immobilière et cadastrale en France. On te demande d'analyser cette adresse pour le carnet logement :
-
-  Adresse : "${addr}"
-  Éléments à détecter : ${items.join(' et ')}
-
-  CONSIGNES DE RAISONNEMENT :
-  1. Regarde la superficie de la parcelle fournie en entête : si elle est minuscule (ex: moins de 150m² en zone urbaine dense ou appartement), la présence d'une piscine est techniquement improbable (false).
-  2. Si la parcelle est de taille moyenne à grande (plus de 300m²-400m²), la place est physiquement suffisante pour accueillir ces équipements.
-  3. En te basant sur la commune, le climat régional (ex: Gard, Hérault = fort taux d'équipement), et l'espace disponible sur la parcelle, émets une estimation probabiliste réaliste.
-
-  Réponds UNIQUEMENT en JSON valide, sans markdown, sans commentaires, exactement ce format :
-  {
-    "piscine": ${wantPool ? 'true ou false' : 'null'},
-    "panneaux": ${wantSolar ? 'true ou false' : 'null'},
-    "confiance": "Élevée" ou "Moyenne" ou "Faible",
-    "raison_piscine": ${wantPool ? '"Explication logique basée sur la taille du terrain et la région"' : 'null'},
-    "raison_panneaux": ${wantSolar ? '"Explication logique basée sur l\'exposition régionale"' : 'null'},
-    "analyse": "Analyse de 3-4 sentences croisant la superficie de la parcelle reçue et les spécificités de la commune."
-  }`;
+  loader.style.display = 'block';
+  resultsArea.classList.remove('visible');
 
   try {
-    const response = await fetch('http://localhost:3000/api/analyse', {
+    const resLoc = await fetch(`/api/location-data?address=${encodeURIComponent(validatedAddress)}`);
+    if (!resLoc.ok) throw new Error("Impossible de récupérer les coordonnées géographiques.");
+    const locationData = await resLoc.json();
+
+    const resAnalyze = await fetch('/api/analyze', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ prompt: prompt, address: addr }) // <-- "address" est maintenant envoyé au serveur
+      body: JSON.stringify({
+        prompt: `Analyse de détection d'équipements pour l'adresse ${validatedAddress}`,
+        options: { pool: true, solar: true },
+        realCadastre: locationData
+      })
     });
 
-    const data = await response.json();
-    if (data.error) throw new Error(data.error.message || 'Erreur API');
+    if (!resAnalyze.ok) throw new Error("Erreur lors de l'analyse IA.");
+    const data = await resAnalyze.json();
 
-    // Consommation directe de data.text renvoyé de façon standardisée par le serveur proxy
-    const rawText = data.text || ''; 
-    let clean = rawText.replace(/```json|```/g, '').trim();
-    const jsonMatch = clean.match(/\{[\s\S]*\}/);
-    if (jsonMatch) clean = jsonMatch[0];
-    const parsed = JSON.parse(clean);
-
-    const entry = {
-      address: addr,
-      pool:  parsed.piscine,
-      solar: parsed.panneaux,
-      confiance: parsed.confiance,
-      raison_piscine: parsed.raison_piscine,
-      raison_panneaux: parsed.raison_panneaux,
-      analyse: parsed.analyse,
+    const historyEntry = {
+      id: Date.now(),
+      address: validatedAddress,
+      pool: chkPool ? data.pool : null,
+      raison_piscine: chkPool ? data.raison_piscine : null,
+      solar: chkSolar ? data.solar : null,
+      raison_panneaux: chkSolar ? data.raison_panneaux : null,
+      analyse: data.analyse,
+      cadastre: locationData
     };
 
-    saveHistory(entry);
-    displayResults(entry);
+    historyData.unshift(historyEntry);
+    saveHistory();
+    renderHistory();
+
+    displayResults(historyEntry);
+    resultsArea.classList.add('visible');
 
   } catch (err) {
-    console.error(err);
-    document.getElementById('error-text').textContent =
-      'Erreur lors de l\'analyse : ' + (err.message || 'Vérifiez votre connexion et réessayez.');
-    document.getElementById('error-box').classList.add('visible');
+    alert(err.message || "Une erreur est survenue lors du traitement.");
   } finally {
-    stopLoadingAnim();
-    document.getElementById('loading').classList.remove('visible');
     btn.disabled = false;
+    loader.style.display = 'none';
   }
 }
 
 function displayResults(entry) {
-  document.getElementById('res-address').textContent = entry.address;
-  document.getElementById('res-confidence').textContent =
-    entry.confiance ? `Confiance : ${entry.confiance}` : 'Analyse complète';
+  if (!entry) return;
 
+  const resultsArea = document.getElementById('results-area');
+  if (resultsArea) resultsArea.classList.add('visible');
+
+  // 1. Verdicts Piscine
   const cardPool = document.getElementById('card-pool');
   const poolV    = document.getElementById('pool-verdict');
   const poolR    = document.getElementById('pool-reason');
-  if (entry.pool === null) {
-    cardPool.className = 'detection-card pool-no';
-    poolV.textContent  = 'Non analysé';
-    poolR.textContent  = 'Cet élément n\'était pas sélectionné.';
-  } else if (entry.pool) {
-    cardPool.className = 'detection-card pool-yes';
-    poolV.textContent  = '✓ Présence probable';
-    poolR.textContent  = entry.raison_piscine || '';
-  } else {
-    cardPool.className = 'detection-card pool-no';
-    poolV.textContent  = '✗ Absence probable';
-    poolR.textContent  = entry.raison_piscine || '';
+  
+  if (cardPool && poolV && poolR) {
+    if (entry.pool === true) {
+      cardPool.className = 'detection-card pool-yes';
+      poolV.textContent  = '✓ Présence détectée par l\'IA';
+      poolR.textContent  = entry.raison_piscine || 'Détectée sur l\'image satellite.';
+    } else {
+      cardPool.className = 'detection-card pool-no';
+      poolV.textContent  = '✗ Absence constatée';
+      poolR.textContent  = entry.raison_piscine || 'Aucune piscine visible.';
+    }
   }
 
+  // 2. Verdicts Panneaux Solaires
   const cardSolar = document.getElementById('card-solar');
   const solarV    = document.getElementById('solar-verdict');
   const solarR    = document.getElementById('solar-reason');
-  if (entry.solar === null) {
-    cardSolar.className = 'detection-card solar-no';
-    solarV.textContent  = 'Non analysé';
-    solarR.textContent  = 'Cet élément n\'était pas sélectionné.';
-  } else if (entry.solar) {
-    cardSolar.className = 'detection-card solar-yes';
-    solarV.textContent  = '✓ Présence probable';
-    solarR.textContent  = entry.raison_panneaux || '';
-  } else {
-    cardSolar.className = 'detection-card solar-no';
-    solarV.textContent  = '✗ Absence probable';
-    solarR.textContent  = entry.raison_panneaux || '';
+  
+  if (cardSolar && solarV && solarR) {
+    if (entry.solar === null || entry.solar === undefined) {
+      cardSolar.className = 'detection-card solar-no';
+      solarV.textContent  = 'Non analysé';
+      solarR.textContent  = 'Cet élément n\'était pas sélectionné.';
+    } else if (entry.solar === true) {
+      cardSolar.className = 'detection-card solar-yes';
+      solarV.textContent  = '✓ Présence détectée par l\'IA';
+      solarR.textContent  = entry.raison_panneaux || 'Détectés sur la toiture.';
+    } else {
+      cardSolar.className = 'detection-card solar-no';
+      solarV.textContent  = '✗ Absence constatée';
+      solarR.textContent  = entry.raison_panneaux || 'Aucun panneau visible.';
+    }
   }
 
-  document.getElementById('analysis-text').textContent = entry.analyse || '';
-  document.getElementById('results').classList.add('visible');
-  document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  // 3. Remplissage des données du Cadastre
+  const cadastreOutput = document.getElementById('cadastre-output');
+  if (cadastreOutput) {
+    const cad = entry.cadastre;
+    if (cad) {
+      cadastreOutput.innerHTML = `
+        <ul style="list-style: none; padding: 0; margin: 0; line-height: 1.6;">
+          <li><strong>Commune :</strong> ${cad.city || 'Inconnue'}</li>
+          <li><strong>ID Parcelle :</strong> ${cad.idParcelle || 'Inconnu'}</li>
+          <li><strong>Superficie :</strong> ${cad.superficie ? cad.superficie + ' m²' : 'Inconnue'}</li>
+          <li><strong>Code INSEE :</strong> ${cad.codeInsee || 'Inconnu'}</li>
+        </ul>
+      `;
+    } else {
+      cadastreOutput.textContent = "Données cadastrales indisponibles.";
+    }
+  }
+
+  // 4. Rapport d'analyse de l'IA
+  const aiResponse = document.getElementById('ai-response');
+  if (aiResponse) {
+    aiResponse.textContent = entry.analyse || "Aucun rapport textuel généré.";
+  }
+
+  // 5. Affichage de la carte aérienne Leaflet
+  const mapContainer = document.getElementById('map-container');
+  let lon = entry.cadastre?.lon || null;
+  let lat = entry.cadastre?.lat || null;
+
+  if (lon && lat) {
+    if (mapContainer) mapContainer.style.display = 'block';
+
+    try {
+      if (!window.ignMap) {
+        window.ignMap = L.map('map').setView([lat, lon], 18);
+
+        L.tileLayer('https://data.geopf.fr/wmts?REQUEST=GetTile&SERVICE=WMTS&VERSION=1.0.0&STYLE=normal&TILEMATRIXSET=PM&FORMAT=image/jpeg&LAYER=ORTHOIMAGERY.ORTHOPHOTOS&TILEMATRIX={z}&TILEROW={y}&TILECOL={x}', {
+          maxZoom: 19,
+          attribution: '© IGN'
+        }).addTo(window.ignMap);
+
+        window.ignMarker = L.marker([lat, lon]).addTo(window.ignMap);
+      } else {
+        window.ignMap.setView([lat, lon], 18);
+        window.ignMarker.setLatLng([lat, lon]);
+      }
+
+      setTimeout(() => {
+        if (window.ignMap) window.ignMap.invalidateSize();
+      }, 250);
+
+    } catch (mapError) {
+      console.error("Erreur Leaflet :", mapError);
+    }
+  } else {
+    if (mapContainer) mapContainer.style.display = 'none';
+  }
 }
+
+document.addEventListener('DOMContentLoaded', () => {
+  renderHistory();
+});

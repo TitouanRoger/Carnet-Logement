@@ -10,24 +10,14 @@ Pour lancer ce projet, suivez les étapes ci-dessous :
 cp .env.example .env
 ```
 
-Ouvrez ensuite `.env` et renseignez vos paramètres :
+Ouvrez ensuite .env et renseignez votre clé API Anthropic :
 
 ```env
-# Choisissez le fournisseur IA : "anthropic" ou "gemini"
-AI_PROVIDER=anthropic
-
 # --- Anthropic (Claude) ---
-# Obtenez votre clé sur https://console.anthropic.com/settings/keys
+# Obtenez votre clé sur [https://console.anthropic.com/settings/keys](https://console.anthropic.com/settings/keys)
 ANTHROPIC_API_KEY=sk-ant-...
 ANTHROPIC_MODEL=claude-3-5-sonnet-20241022
-
-# --- Google Gemini ---
-# Obtenez votre clé sur https://aistudio.google.com/app/apikey
-GEMINI_API_KEY=AIza...
-GEMINI_MODEL=gemini-3.1-flash-lite
 ```
-
-> **Remarque :** seule la clé du fournisseur sélectionné dans `AI_PROVIDER` est obligatoire.
 
 ## 2. Installation des dépendances
 

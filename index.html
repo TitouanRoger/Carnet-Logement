@@ -5,12 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Carnet Logement — Analyse IA</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght=600;700&family=Inter:wght=300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 </head>
 <body>
 
-<!-- HEADER -->
 <header>
   <div class="logo">
     <div class="logo-icon">🏠</div>
@@ -18,78 +19,57 @@
   </div>
 </header>
 
-<!-- HERO -->
 <div class="hero">
   <div class="hero-eyebrow">Analyse automatisée</div>
   <h1>Détection Piscine &amp;<br>Panneaux Photovoltaïques</h1>
   <p>Entrez une adresse, l'IA analyse les données disponibles et détermine la présence d'équipements déclarables.</p>
 </div>
 
-<!-- MAIN CARD -->
 <div class="main-card">
   <div class="section-label">Nouvelle analyse</div>
 
   <div class="address-form">
-    <div class="field-group">
-      <label for="addr">Adresse du bien immobilier</label>
-      <div class="autocomplete-wrapper">
-        <div class="input-wrap">
-          <svg class="pin" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-            <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
-            <circle cx="12" cy="9" r="2.5"/>
-          </svg>
-          <input type="text" id="addr"
-            placeholder="Ex: 12 Rue des Lilas, 34000 Montpellier"
-            autocomplete="off" spellcheck="false" />
+    <form id="analyzer-form">
+      <div class="field-group">
+        <label for="addr">Adresse du bien immobilier</label>
+        <div class="autocomplete-wrapper">
+          <div class="input-wrap">
+            <svg class="pin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+            <input type="text" id="addr" placeholder="Ex: 55 Rue du Faubourg Saint-Honoré, Paris" autocomplete="off" />
+          </div>
+          <div id="ac-dropdown" class="autocomplete-dropdown"></div>
         </div>
-        <div class="autocomplete-dropdown hidden" id="ac-dropdown"></div>
+        <div class="input-hint" id="addr-hint">Sélectionnez l'adresse exacte dans la liste</div>
+        <div class="error-msg" id="addr-error"></div>
       </div>
-      <span class="field-error" id="addr-error"></span>
-      <span class="hint" id="addr-hint">Sélectionnez une adresse dans la liste pour valider</span>
-    </div>
 
-    <div class="field-group">
-      <label>Éléments à détecter</label>
-      <div class="options-row">
-        <label class="option-chip active-pool" id="chip-pool">
-          <input type="checkbox" id="chk-pool" checked> 🏊 Piscine
-        </label>
-        <label class="option-chip active-solar" id="chip-solar">
-          <input type="checkbox" id="chk-solar" checked> ☀️ Panneaux photovoltaïques
-        </label>
+      <div class="field-group">
+        <label>Éléments à rechercher</label>
+        <div class="chips-container">
+          <div class="option-chip active-pool" id="chip-pool">
+            🏊 Piscine
+            <input type="checkbox" id="chk-pool" checked style="display:none" />
+          </div>
+          <div class="option-chip active-solar" id="chip-solar">
+            ☀️ Panneaux solaires
+            <input type="checkbox" id="chk-solar" checked style="display:none" />
+          </div>
+        </div>
       </div>
-    </div>
 
-    <button class="btn-analyse" id="btn-analyse" onclick="analyser()">
-      <svg width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
-        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
-      </svg>
-      Lancer l'analyse IA
-    </button>
+      <button type="submit" class="submit-btn" id="submit-btn">Lancer l'analyse par IA</button>
+    </form>
   </div>
 
-  <!-- Loading -->
-  <div class="loading-state" id="loading">
+  <div class="loader-container" id="loader">
     <div class="spinner"></div>
-    <div class="loading-text">
-      <strong id="loading-msg">Analyse en cours…</strong>
-      <span id="loading-sub">L'IA interroge les données cadastrales et satellites</span>
-    </div>
+    <div style="margin-top:1rem; font-weight:500; color:var(--slate)">Extraction du Cadastre et analyse IA en cours...</div>
   </div>
 
-  <!-- Error -->
-  <div class="error-box" id="error-box">
-    ⚠️ <span id="error-text">Une erreur est survenue.</span>
-  </div>
-
-  <!-- Results -->
-  <div class="results-section" id="results">
+  <div class="results-area" id="results-area">
     <div class="results-header">
-      <div>
-        <div style="font-size:.8rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);margin-bottom:.2rem">Résultats</div>
-        <div class="results-address" id="res-address"></div>
-      </div>
-      <div class="confidence-badge" id="res-confidence">Analyse complète</div>
+      <div class="rh-title">Résultats de la détection</div>
+      <div class="rh-subtitle">Données croisées Cadastre National &amp; Analyse Visuelle</div>
     </div>
 
     <div class="detection-grid">
@@ -107,25 +87,33 @@
       </div>
     </div>
 
-    <div class="analysis-box">
-      <div class="ab-label">Analyse détaillée par l'IA</div>
-      <p id="analysis-text"></p>
+    <div class="cadastre-info">
+      <h3>Données Cadastrales et Aériennes</h3>
+      <div id="cadastre-output" style="margin-bottom: 15px;"></div>
+      <div id="aerial-photo-output">
+        <div id="map-container" style="display: none; margin-top: 15px;">
+          <p style="margin-bottom: 8px;"><strong>Visualisation de la parcelle (Vue aérienne IGN) :</strong></p>
+          <div id="map" style="height: 400px; width: 100%; border-radius: 8px; border: 1px solid var(--border); z-index: 1;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="ai-section">
+      <h3>Rapport d'analyse IA détaillé</h3>
+      <div class="ai-response" id="ai-response"></div>
     </div>
   </div>
+
 </div>
 
-<!-- HISTORY -->
 <div class="history-section" id="history-section" style="display:none">
   <div class="history-title">Analyses récentes</div>
   <div class="history-list" id="history-list"></div>
 </div>
 
-<!-- FOOTER -->
 <footer>
   <strong>Carnet Logement</strong> · Analyse propulsée par <strong>l'IA</strong><br>
-  <span style="font-size:.72rem;margin-top:.3rem;display:block">
-    Les résultats sont indicatifs et basés sur les données disponibles. Une vérification terrain peut être nécessaire.
-  </span>
+  <span style="font-size:.72rem; color:var(--muted)">Données issues de l'API Adresse Nationale et de la Géoplatforme IGN</span>
 </footer>
 
 <script src="script.js"></script>

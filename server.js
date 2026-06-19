@@ -1,206 +1,156 @@
-require('dotenv').config();
+require('dotenv').config({ quiet: true });
 const express = require('express');
 const cors = require('cors');
 
 const app = express();
-app.use(cors()); // Autorise votre fichier HTML à interroger ce serveur
+app.use(cors()); 
 app.use(express.json());
-app.use(express.static(__dirname)); // Sert les fichiers statiques (HTML, CSS, JS)
+app.use(express.static(__dirname)); 
 
-const AI_PROVIDER = process.env.AI_PROVIDER || 'anthropic'; 
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY;
-const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-3-5-sonnet-20241022';
+const ANTHROPIC_MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-4-6';
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const GEMINI_MODEL = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite'; 
-
-// Vérification des clés au démarrage selon l'IA sélectionnée
-if (AI_PROVIDER === 'anthropic' && !ANTHROPIC_API_KEY) {
-    console.error("Erreur : La clé API Anthropic n'est pas configurée dans le fichier .env");
-    process.exit(1);
-}
-
-if (AI_PROVIDER === 'gemini' && !GEMINI_API_KEY) {
-    console.error("Erreur : La clé API Gemini n'est pas configurée dans le fichier .env");
-    process.exit(1);
-}
-
-// Import dynamique de node-fetch
+const https = require('https');
 const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
-/**
- * Récupère les données géographiques et la superficie cadastrale réelle via l'API Etalab
- */
-async function getCadastreData(address) {
-    try {
-        // 1. Convertir l'adresse en coordonnées géographiques
-        const geoRes = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(address)}&limit=1`, {
-            headers: { 'User-Agent': 'MonCarnetLogementApp/1.0 (contact@example.com)' }
-        });
-        const geoData = await geoRes.json();
-        
-        if (!geoData.features || geoData.features.length === 0) return null;
-        
-        const props = geoData.features[0].properties;
-        const [lon, lat] = geoData.features[0].geometry.coordinates;
-        const city = props.city;
+// Agent HTTPS sans keep-alive : certains serveurs (ex: apicarto.ign.fr) coupent
+// agressivement les connexions persistantes, ce qui provoque des ECONNRESET / "socket hang up".
+const noKeepAliveAgent = new https.Agent({ keepAlive: false });
 
-        // 2. Récupérer le code INSEE depuis l'API adresse (déjà dans props)
-        const codeInsee = props.citycode || props.city_code || null;
-
-        // 3. Interroger l'API Cadastre IGN avec une géométrie GeoJSON Point
-        // IMPORTANT : lon/lat seuls retournent toute la commune (1000 parcelles).
-        // Il faut encoder le point en GeoJSON et passer le code_insee pour filtrer.
-        const pointGeom = JSON.stringify({ type: "Point", coordinates: [lon, lat] });
-        let cadastreUrl = `https://apicarto.ign.fr/api/cadastre/parcelle?geom=${encodeURIComponent(pointGeom)}`;
-        if (codeInsee) cadastreUrl += `&code_insee=${codeInsee}`;
-
-        const cadastreRes = await fetch(cadastreUrl, {
-            headers: {
-                'User-Agent': 'MonCarnetLogementApp/1.0 (contact@example.com)',
-                'Accept': 'application/json'
-            }
-        });
-
-        console.log(`IGN cadastre status: ${cadastreRes.status} — code_insee: ${codeInsee}`);
-
-        if (cadastreRes.ok) {
-            const cadastreData = await cadastreRes.json();
-            const count = cadastreData.features?.length ?? 0;
-            console.log(`IGN features count: ${count}`);
-
-            if (count > 0) {
-                // Trouver la parcelle dont la géométrie contient réellement notre point
-                // (au cas où plusieurs features sont retournées, prendre la plus petite superficie = la plus précise)
-                const features = cadastreData.features;
-                const best = features.reduce((prev, curr) => {
-                    const ps = prev.properties.contenance ?? Infinity;
-                    const cs = curr.properties.contenance ?? Infinity;
-                    return cs < ps ? curr : prev;
-                });
-
-                const parcelle = best.properties;
-                console.log('IGN parcelle retenue:', JSON.stringify(parcelle, null, 2));
-
-                return {
-                    city: city,
-                    idParcelle: parcelle.idu ?? 'N/A',
-                    superficie: parcelle.contenance ?? null,
-                    codeInsee: parcelle.code_insee ?? codeInsee,
-                    info: `Données IGN extraites — ${count} feature(s) — parcelle ${parcelle.idu}`
-                };
-            }
-        } else {
-            const errBody = await cadastreRes.text();
-            console.warn(`Réponse IGN non-OK : ${cadastreRes.status} — ${errBody}`);
+// fetch avec nouvelle(s) tentative(s) en cas d'erreur réseau transitoire (ECONNRESET, socket hang up)
+async function fetchWithRetry(url, options = {}, retries = 2, delayMs = 400) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            return await fetch(url, { agent: noKeepAliveAgent, ...options });
+        } catch (err) {
+            const isTransient = err.code === 'ECONNRESET' || /socket hang up/i.test(err.message || '');
+            if (!isTransient || attempt === retries) throw err;
+            console.warn(`Tentative ${attempt + 1} échouée (${err.code || err.message}), nouvel essai...`);
+            await new Promise(r => setTimeout(r, delayMs));
         }
-
-        // 3. Fallback : l'IGN n'a pas trouvé la parcelle (adresse hors zone couverte, etc.)
-        return {
-            city: city,
-            idParcelle: "Non récupérée",
-            superficie: null,
-            info: "Parcelle non localisée dans le référentiel IGN — superficie indisponible"
-        };
-
-    } catch (e) {
-        console.error("Erreur lors de la récupération du Cadastre:", e);
-        return { city: "Inconnue", idParcelle: "Erreur", superficie: null, info: "Erreur technique lors de l'appel cadastre" };
     }
 }
 
-app.post('/api/analyse', async (req, res) => {
-  try {
-    const { prompt, address } = req.body;
-    
-    if (!prompt) {
-      return res.status(400).json({ error: "Le champ 'prompt' est requis." });
-    }
-
-    // Récupération automatique des données réelles du Cadastre français
-    const realCadastre = address ? await getCadastreData(address) : null;
-    
-    if (realCadastre) {
-        console.log(`Données cadastrales récupérées pour ${address} :`, realCadastre);
-    }
-
-    // Injection des faits réels dans le prompt envoyé à l'IA (RAG)
-    let contextualizedPrompt = prompt;
-    if (realCadastre) {
-        const superficieStr = realCadastre.superficie
-            ? `${realCadastre.superficie} mètres carrés`
-            : 'Indisponible (parcelle non localisée dans le référentiel IGN)';
-
-        const consigneSuperficie = realCadastre.superficie
-            ? `CONSIGNE IMPÉRATIVE : Utilise explicitement la valeur de SUPERFICIE_REELLE_DE_LA_PARCELLE (${realCadastre.superficie} m²) pour justifier tes choix dans le champ "analyse" du JSON.`
-            : `CONSIGNE : La superficie cadastrale est indisponible pour cette adresse. Base-toi uniquement sur la commune, le climat régional et la densité urbaine pour estimer la probabilité. Indique confiance "Faible" dans ce cas.`;
-
-        contextualizedPrompt = `Voici les caractéristiques physiques réelles et officielles issues du Cadastre Français (IGN/DGFiP) pour l'adresse demandée :
-- COMMUNE : ${realCadastre.city || 'Inconnue'}
-- CODE_INSEE : ${realCadastre.codeInsee || 'Inconnu'}
-- ID_PARCELLE : ${realCadastre.idParcelle || 'Inconnu'}
-- SUPERFICIE_REELLE_DE_LA_PARCELLE : ${superficieStr}
-- ETAT_API : ${realCadastre.info || 'OK'}
-
----
-${consigneSuperficie}
-
-${prompt}`;
-    }
-
-    let response;
-    let data;
-
-    // --- LOGIQUE ANTHROPIC ---
-    if (AI_PROVIDER === 'anthropic') {
-        response = await fetch('https://api.anthropic.com/v1/messages', {
-            method: 'POST',
-            headers: { 
-                'Content-Type': 'application/json',
-                'x-api-key': ANTHROPIC_API_KEY,
-                'anthropic-version': '2023-06-01'
-            },
-            body: JSON.stringify({
-                model: ANTHROPIC_MODEL,
-                max_tokens: 1000,
-                messages: [{ role: 'user', content: contextualizedPrompt }]
-            })
-        });
-
-        data = await response.json();
-        if (!response.ok) return res.status(response.status).json(data);
-
-        return res.json({ text: data.content[0].text, raw: data });
-    } 
-    
-    // --- LOGIQUE GEMINI ---
-    else if (AI_PROVIDER === 'gemini') {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${GEMINI_API_KEY}`;
+async function fetchSatelliteImageBuffer(lon, lat, scaleMultiplier = 1) {
+    try {
+        const deltaLon = 0.0007 * scaleMultiplier; 
+        const deltaLat = 0.0005 * scaleMultiplier; 
+        const bbox = `${lat - deltaLat},${lon - deltaLon},${lat + deltaLat},${lon + deltaLon}`;
+        const wmsUrl = `https://data.geopf.fr/wms-r/wms?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=ORTHOIMAGERY.ORTHOPHOTOS&STYLES=&CRS=EPSG:4326&BBOX=${bbox}&WIDTH=600&HEIGHT=600&FORMAT=image/png`;
         
-        response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                contents: [{ parts: [{ text: contextualizedPrompt }] }]
-            })
-        });
-
-        data = await response.json();
-        if (!response.ok) return res.status(response.status).json(data);
-
-        const textResponse = data.candidates?.[0]?.content?.parts?.[0]?.text;
+        const response = await fetch(wmsUrl);
+        if (!response.ok) return null;
         
-        if (!textResponse) {
-            return res.status(500).json({ error: "Structure de réponse Gemini inattendue", details: data });
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+    } catch (e) {
+        console.error("Erreur récupération image IGN:", e);
+        return null;
+    }
+}
+
+async function getCadastreData(address) {
+    try {
+        const urlAdresses = `https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(address)}&limit=1`;
+        const resAddr = await fetchWithRetry(urlAdresses);
+        const jsonAddr = await resAddr.json();
+        
+        if (!jsonAddr.features || jsonAddr.features.length === 0) return null;
+        
+        const feature = jsonAddr.features[0];
+        const [lon, lat] = feature.geometry.coordinates;
+        const codeInsee = feature.properties.citycode;
+        const city = feature.properties.city;
+
+        const urlCadastre = `https://apicarto.ign.fr/api/cadastre/parcelle?code_insee=${codeInsee}&lon=${lon}&lat=${lat}`;
+        const resCad = await fetchWithRetry(urlCadastre);
+        
+        if (!resCad.ok) {
+            return { lon, lat, codeInsee, city, idParcelle: 'Non localisée', superficie: null, info: 'Parcelle introuvable sur ApiCarto' };
         }
 
-        return res.json({ text: textResponse, raw: data });
-    }
+        const jsonCad = await resCad.json();
+        if (!jsonCad.features || jsonCad.features.length === 0) {
+            return { lon, lat, codeInsee, city, idParcelle: 'Non localisée', superficie: null, info: 'Aucune parcelle à ces coordonnées' };
+        }
 
+        const parcelle = jsonCad.features[0].properties;
+        return { lon, lat, codeInsee, city, idParcelle: parcelle.id || 'Inconnu', superficie: parcelle.contenance || null, info: 'OK' };
+    } catch (err) {
+        console.error("Erreur getCadastreData:", err);
+        return null;
+    }
+}
+
+app.post('/api/analyze', async (req, res) => {
+  const { prompt, options, realCadastre } = req.body;
+
+  if (!prompt) return res.status(400).json({ error: 'Le prompt est requis.' });
+
+  let imageLargeBase64 = null;
+  let imageSerreeBase64 = null;
+
+  if (realCadastre && realCadastre.lon && realCadastre.lat) {
+      const bufLarge = await fetchSatelliteImageBuffer(realCadastre.lon, realCadastre.lat, 1.0);
+      if (bufLarge) imageLargeBase64 = bufLarge.toString('base64');
+      const bufSerre = await fetchSatelliteImageBuffer(realCadastre.lon, realCadastre.lat, 0.35);
+      if (bufSerre) imageSerreeBase64 = bufSerre.toString('base64');
+  }
+
+  const systemInstruction = `Tu es un expert en analyse satellite. Analyse la présence de piscine (bassin d'eau) et panneaux solaires. Réponds uniquement en JSON.`;
+
+  const contextualizedPrompt = `Analyse les équipements pour la parcelle. Respecte ce format JSON : {"pool": boolean, "raison_piscine": string, "solar": boolean, "raison_panneaux": string, "analyse": string}`;
+
+  try {
+      const contentPayload = [];
+      if (imageLargeBase64) {
+          contentPayload.push({ type: "text", text: "Vue globale :" });
+          contentPayload.push({ type: "image", source: { type: "base64", media_type: "image/png", data: imageLargeBase64 } });
+      }
+      if (imageSerreeBase64) {
+          contentPayload.push({ type: "text", text: "Vue zoomée :" });
+          contentPayload.push({ type: "image", source: { type: "base64", media_type: "image/png", data: imageSerreeBase64 } });
+      }
+      contentPayload.push({ type: "text", text: contextualizedPrompt });
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'x-api-key': ANTHROPIC_API_KEY,
+          'anthropic-version': '2023-06-01',
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: ANTHROPIC_MODEL,
+          max_tokens: 1000,
+          temperature: 0.2,
+          system: systemInstruction,
+          messages: [{ role: 'user', content: contentPayload }]
+        })
+      });
+
+      const data = await response.json();
+      if (!response.ok) return res.status(response.status).json(data);
+      
+      let rawText = data.content?.[0]?.text.trim() || "{}";
+      let jsonMatch = rawText.match(/```json\s*([\s\S]*?)\s*```/) || rawText.match(/({[\s\S]*?})/);
+      const parsed = JSON.parse(jsonMatch ? jsonMatch[1] : rawText);
+      return res.json(parsed);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: "Erreur analyse.", details: error.message });
   }
 });
 
-// Écoute sur le port 3000
-app.listen(3000, () => console.log(`Serveur Hybride (RAG Cadastre) lancé sur http://localhost:3000 [Mode: ${AI_PROVIDER}]`));
+app.get('/api/location-data', async (req, res) => {
+    const address = req.query.address;
+    if (!address) return res.status(400).json({ error: 'Adresse manquante.' });
+    try {
+        const data = await getCadastreData(address);
+        data ? res.json(data) : res.status(404).json({ error: 'Introuvable' });
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Serveur opérationnel sur`, process.env.API_URL || `http://localhost:${PORT}`));

@@ -43,33 +43,30 @@
         <div class="error-msg" id="addr-error"></div>
       </div>
 
-      <div class="field-group">
-        <label>Éléments à rechercher</label>
-        <div class="chips-container">
-          <div class="option-chip active-pool" id="chip-pool">
-            🏊 Piscine
-            <input type="checkbox" id="chk-pool" checked style="display:none" />
-          </div>
-          <div class="option-chip active-solar" id="chip-solar">
-            ☀️ Panneaux solaires
-            <input type="checkbox" id="chk-solar" checked style="display:none" />
-          </div>
-        </div>
-      </div>
-
-      <button type="submit" class="submit-btn" id="submit-btn">Lancer l'analyse par IA</button>
+      <button type="submit" class="submit-btn" id="submit-btn">Localiser la parcelle</button>
     </form>
   </div>
 
   <div class="loader-container" id="loader">
     <div class="spinner"></div>
-    <div style="margin-top:1rem; font-weight:500; color:var(--slate)">Extraction du Cadastre et analyse IA en cours...</div>
+    <div style="margin-top:1rem; font-weight:500; color:var(--slate)" id="loader-text">Recherche de la parcelle cadastrale...</div>
+  </div>
+
+  <div class="parcel-selection" id="parcel-selection" style="display:none">
+    <div class="results-header">
+      <div class="rh-title">Sélection de la parcelle à analyser</div>
+      <div class="rh-subtitle">Cochez les parcelles cadastrales contiguës qui appartiennent au même bien (le Cadastre ne permet pas de le déduire automatiquement)</div>
+    </div>
+    <div class="parcel-warning" id="parcel-warning" style="display:none"></div>
+    <div id="parcel-map" style="height: 420px; width: 100%; border-radius: 8px; border: 1px solid var(--border); z-index: 1; margin-bottom: 1rem;"></div>
+    <div id="parcel-list" class="parcel-list"></div>
+    <button type="button" class="submit-btn" id="launch-analysis-btn">Lancer l'analyse par IA sur la sélection</button>
   </div>
 
   <div class="results-area" id="results-area">
     <div class="results-header">
       <div class="rh-title">Résultats de la détection</div>
-      <div class="rh-subtitle">Données croisées Cadastre National &amp; Analyse Visuelle</div>
+      <div class="rh-subtitle">Analyse visuelle IA restreinte à la parcelle sélectionnée &amp; comparaison avec le bâti cadastré</div>
     </div>
 
     <div class="detection-grid">
@@ -77,30 +74,25 @@
         <div class="dc-icon">🏊</div>
         <div class="dc-title">Piscine</div>
         <div class="dc-verdict" id="pool-verdict">—</div>
-        <div class="dc-reason" id="pool-reason"></div>
+        <div class="dc-confidence" id="pool-confidence"></div>
       </div>
       <div class="detection-card" id="card-solar">
         <div class="dc-icon">☀️</div>
         <div class="dc-title">Panneaux photovoltaïques</div>
         <div class="dc-verdict" id="solar-verdict">—</div>
-        <div class="dc-reason" id="solar-reason"></div>
+        <div class="dc-confidence" id="solar-confidence"></div>
       </div>
     </div>
 
     <div class="cadastre-info">
-      <h3>Données Cadastrales et Aériennes</h3>
+      <h3>Données Cadastrales</h3>
       <div id="cadastre-output" style="margin-bottom: 15px;"></div>
       <div id="aerial-photo-output">
-        <div id="map-container" style="display: none; margin-top: 15px;">
-          <p style="margin-bottom: 8px;"><strong>Visualisation de la parcelle (Vue aérienne IGN) :</strong></p>
-          <div id="map" style="height: 400px; width: 100%; border-radius: 8px; border: 1px solid var(--border); z-index: 1;"></div>
+        <div id="map-container" style="margin-top: 15px;">
+          <p style="margin-bottom: 8px;"><strong>Image analysée par l'IA (contour de la parcelle en rouge) :</strong></p>
+          <img id="analyzed-image" style="max-width:100%; border-radius: 8px; border: 1px solid var(--border);" />
         </div>
       </div>
-    </div>
-
-    <div class="ai-section">
-      <h3>Rapport d'analyse IA détaillé</h3>
-      <div class="ai-response" id="ai-response"></div>
     </div>
   </div>
 

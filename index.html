@@ -75,6 +75,7 @@
         <div class="dc-title">Piscine</div>
         <div class="dc-verdict" id="pool-verdict">—</div>
         <div class="dc-confidence" id="pool-confidence"></div>
+        <div class="dc-flag" id="pool-non-declaree-flag" style="display:none">⚠️ Probablement non déclarée</div>
       </div>
       <div class="detection-card" id="card-solar">
         <div class="dc-icon">☀️</div>
@@ -89,8 +90,25 @@
       <div id="cadastre-output" style="margin-bottom: 15px;"></div>
       <div id="aerial-photo-output">
         <div id="map-container" style="margin-top: 15px;">
-          <p style="margin-bottom: 8px;"><strong>Image analysée par l'IA (contour de la parcelle en rouge) :</strong></p>
-          <img id="analyzed-image" style="max-width:100%; border-radius: 8px; border: 1px solid var(--border);" />
+          <div class="images-comparison-grid">
+            <div class="image-panel">
+              <p class="image-panel-label">Photo aérienne (contour de la parcelle en rouge)</p>
+              <img id="analyzed-image" />
+              <p class="image-history-unavailable" id="analyzed-image-unavailable" style="display:none">
+                ℹ️ Image non conservée pour cette ancienne analyse (les images ne sont pas gardées après rechargement de la page, pour des raisons de stockage). Relancez l'analyse pour la revoir.
+              </p>
+            </div>
+            <div class="image-panel" id="plan-cadastral-panel" style="display:none">
+              <p class="image-panel-label">Plan cadastral officiel (DGFiP) — les piscines déjà recensées apparaissent en bleu</p>
+              <img id="plan-cadastral-image" />
+              <p class="image-history-unavailable" id="plan-cadastral-image-unavailable" style="display:none">
+                ℹ️ Image non conservée pour cette ancienne analyse. Relancez l'analyse pour la revoir.
+              </p>
+            </div>
+          </div>
+          <p class="plan-cadastral-unavailable" id="plan-cadastral-unavailable" style="display:none">
+            ℹ️ Le plan cadastral vectoriel n'est pas disponible pour cette commune : la comparaison "piscine non déclarée" n'a pas pu être faite, seule l'analyse de la photo aérienne est fiable.
+          </p>
         </div>
       </div>
     </div>

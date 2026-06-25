@@ -116,14 +116,28 @@ document.addEventListener('click', function(e) {
 });
 
 // ── Historique ──
+const MAX_HISTORY_ENTRIES = 10; // au-delà, la plus ancienne analyse est retirée automatiquement
 let historyData = [];
 try {
   const local = localStorage.getItem('cl_history');
-  if (local) historyData = JSON.parse(local);
+  if (local) historyData = JSON.parse(local).slice(0, MAX_HISTORY_ENTRIES);
 } catch (e) {}
 
 function saveHistory() {
-  localStorage.setItem('cl_history', JSON.stringify(historyData));
+  // Les images en base64 (photo aérienne + plan cadastral, ~800x800 chacune) sont bien trop
+  // lourdes pour localStorage (quota généralement de 5-10 Mo par origine) : quelques analyses
+  // suffisent à le dépasser. On ne persiste donc qu'une version allégée (sans les champs image)
+  // ; les images restent disponibles en mémoire (historyData) pour la session en cours, mais
+  // ne survivent pas à un rechargement de page — voir displayResults pour la gestion de ce cas.
+  try {
+    const allegeHistory = historyData.map(({ image_base64, plan_cadastral_base64, ...reste }) => reste);
+    localStorage.setItem('cl_history', JSON.stringify(allegeHistory));
+  } catch (e) {
+    // Si même la version allégée dépasse le quota (très ancien historique très long, navigateur
+    // restrictif, etc.), on ne bloque pas l'utilisateur : l'analyse reste affichée à l'écran et
+    // dans la session en cours, simplement elle ne sera pas retrouvable après un rechargement.
+    console.warn('Impossible de sauvegarder l\'historique dans localStorage :', e.message);
+  }
 }
 
 function renderHistory() {
@@ -393,7 +407,8 @@ async function handleAnalyze() {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        parcelles: selectedFeatures
+        parcelles: selectedFeatures,
+        codeInsee: currentLocationData.codeInsee
       })
     });
 
@@ -405,13 +420,27 @@ async function handleAnalyze() {
       address: validatedAddress,
       pool: data.pool,
       pool_confidence: data.pool_confidence,
+      pool_non_declaree: data.pool_non_declaree,
       solar: data.solar,
       solar_confidence: data.solar_confidence,
       cadastre: currentLocationData,
-      image_base64: data.image_base64
+      // Indicateur léger et persistable, distinct de plan_cadastral_base64 (l'image elle-même,
+      // jamais conservée dans localStorage) : permet de savoir, même après rechargement de la
+      // page, si cette commune avait un plan cadastral exploitable lors de l'analyse — pour ne
+      // pas afficher à tort "indisponible pour cette commune" quand c'est juste que l'image n'a
+      // pas été persistée.
+      plan_cadastral_disponible: !!data.plan_cadastral_base64,
+      image_base64: data.image_base64,
+      plan_cadastral_base64: data.plan_cadastral_base64
     };
 
+    // On limite le nombre d'entrées conservées : même allégée (sans images), une liste qui
+    // grossit indéfiniment finirait par alourdir le chargement de la page et le localStorage.
+    // La plus ancienne est retirée dès que la limite est dépassée.
     historyData.unshift(historyEntry);
+    if (historyData.length > MAX_HISTORY_ENTRIES) {
+      historyData.length = MAX_HISTORY_ENTRIES;
+    }
     saveHistory();
     renderHistory();
 
@@ -451,6 +480,14 @@ function displayResults(entry) {
     poolC.textContent = confidenceLabel(entry.pool_confidence);
   }
 
+  // pool_non_declaree est null quand le plan cadastral n'a pas pu être comparé (commune non
+  // vectorisée, service indisponible) : dans ce cas on n'affiche aucun badge plutôt que
+  // d'affirmer à tort une absence ou une présence de déclaration.
+  const poolFlag = document.getElementById('pool-non-declaree-flag');
+  if (poolFlag) {
+    poolFlag.style.display = (entry.pool && entry.pool_non_declaree === true) ? 'block' : 'none';
+  }
+
   const cardSolar = document.getElementById('card-solar');
   const solarV    = document.getElementById('solar-verdict');
   const solarC    = document.getElementById('solar-confidence');
@@ -479,8 +516,43 @@ function displayResults(entry) {
   }
 
   const imgEl = document.getElementById('analyzed-image');
-  if (imgEl && entry.image_base64) {
-    imgEl.src = `data:image/png;base64,${entry.image_base64}`;
+  const imgUnavailable = document.getElementById('analyzed-image-unavailable');
+  if (imgEl && imgUnavailable) {
+    if (entry.image_base64) {
+      imgEl.src = `data:image/png;base64,${entry.image_base64}`;
+      imgEl.style.display = 'block';
+      imgUnavailable.style.display = 'none';
+    } else {
+      imgEl.style.display = 'none';
+      imgUnavailable.style.display = 'block';
+    }
+  }
+
+  const planPanel = document.getElementById('plan-cadastral-panel');
+  const planImg = document.getElementById('plan-cadastral-image');
+  const planImgUnavailable = document.getElementById('plan-cadastral-image-unavailable');
+  const planUnavailable = document.getElementById('plan-cadastral-unavailable');
+  if (planPanel && planImg && planImgUnavailable && planUnavailable) {
+    if (entry.plan_cadastral_base64) {
+      // Cas normal : image disponible (analyse de la session en cours).
+      planImg.src = `data:image/png;base64,${entry.plan_cadastral_base64}`;
+      planImg.style.display = 'block';
+      planImgUnavailable.style.display = 'none';
+      planPanel.style.display = 'block';
+      planUnavailable.style.display = 'none';
+    } else if (entry.plan_cadastral_disponible) {
+      // La commune avait bien un plan cadastral exploitable lors de l'analyse, mais l'image
+      // n'a pas été conservée (historique relu après rechargement de page) : on le dit
+      // explicitement plutôt que de laisser penser que la commune n'est pas couverte.
+      planImg.style.display = 'none';
+      planImgUnavailable.style.display = 'block';
+      planPanel.style.display = 'block';
+      planUnavailable.style.display = 'none';
+    } else {
+      // Vrai cas d'indisponibilité : pas de plan cadastral vectoriel pour cette commune.
+      planPanel.style.display = 'none';
+      planUnavailable.style.display = 'block';
+    }
   }
 }
 

@@ -285,6 +285,56 @@ async function fetchSatelliteImageBuffer(bbox, widthPx = 800, heightPx = 800) {
 }
 
 /**
+ * Récupère le rendu visuel du plan cadastral (service WMS de la DGFiP, cadastre.gouv.fr),
+ * cadré sur la même bbox que la photo aérienne pour permettre une comparaison directe.
+ *
+ * Pourquoi : depuis la mise à jour du standard d'échange du plan cadastral (juin 2025), la
+ * DGFiP reporte sur ce plan les piscines détectées par IA sur les prises de vue aériennes et
+ * déjà reconnues comme fiscalisées ("piscines vues du ciel"). Une piscine visible sur la photo
+ * aérienne mais absente (non tracée en bleu) sur ce plan est donc un signal qu'elle n'a
+ * probablement pas encore été déclarée/taxée — l'inverse (bleu présent) ne prouve pas l'absence
+ * de toute irrégularité, mais c'est un indice utile en plus de l'analyse purement visuelle.
+ *
+ * On utilise la couche HYDRO (puits, étangs, lacs, cours d'eau, piscines — la piscine y a son
+ * propre style) ainsi que CP.CadastralParcel pour garder les limites de parcelle visibles en
+ * repère. Ce service n'est disponible que pour les communes au plan cadastral vectorisé ; pour
+ * les autres (ou en cas d'erreur réseau), on renvoie null sans bloquer le reste de l'analyse.
+ */
+async function fetchPlanCadastralBuffer(bbox, codeInsee, widthPx = 800, heightPx = 800) {
+    if (!codeInsee) return null;
+    try {
+        const [minLon, minLat, maxLon, maxLat] = bbox;
+        // Le WMS cadastre.gouv.fr accepte EPSG:4326 ; l'ordre des coordonnées dans la BBOX
+        // pour ce CRS suit la convention lat,lon,lat,lon (comme pour le WMS IGN utilisé plus haut).
+        const wmsBbox = `${minLat},${minLon},${maxLat},${maxLon}`;
+        const layers = 'CP.CadastralParcel,HYDRO,BU.Building';
+        const wmsUrl = `https://inspire.cadastre.gouv.fr/scpc/${codeInsee}.wms?service=WMS&version=1.3.0&request=GetMap&layers=${layers}&styles=&format=image/png&crs=EPSG:4326&bbox=${wmsBbox}&width=${widthPx}&height=${heightPx}`;
+
+        const response = await fetchWithRetry(wmsUrl);
+        if (!response.ok) {
+            // Cas attendu et non bloquant : commune au plan cadastral non vectorisé, ou
+            // service temporairement indisponible.
+            console.warn(`Plan cadastral WMS indisponible pour la commune ${codeInsee} (HTTP ${response.status}).`);
+            return null;
+        }
+
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('image')) {
+            // Le service WMS renvoie parfois une page d'erreur XML avec un code 200 ; on s'assure
+            // de bien avoir reçu une image avant de continuer.
+            console.warn(`Plan cadastral WMS : réponse non-image pour la commune ${codeInsee} (content-type: ${contentType}).`);
+            return null;
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        return Buffer.from(arrayBuffer);
+    } catch (e) {
+        console.error('Erreur récupération plan cadastral DGFiP :', e.message);
+        return null;
+    }
+}
+
+/**
  * Convertit une coordonnée géographique en pixel dans l'image générée par fetchSatelliteImageBuffer,
  * pour pouvoir dessiner le contour de la/des parcelle(s) par-dessus l'image satellite.
  */
@@ -347,21 +397,23 @@ app.get('/api/location-data', async (req, res) => {
  * POST /api/analyze
  * Body attendu :
  * {
- *   codeInsee: string,
- *   parcelles: GeoJSON.Feature[]   // parcelle principale + voisines cochées par l'utilisateur
+ *   codeInsee: string,              // utilisé pour récupérer le plan cadastral DGFiP (optionnel)
+ *   parcelles: GeoJSON.Feature[]    // parcelle principale + voisines cochées par l'utilisateur
  * }
  *
  * Sortie volontairement minimale (coût des tokens de sortie) :
  * {
  *   pool: boolean,
  *   pool_confidence: number (0-1),
+ *   pool_non_declaree: boolean | null,   // true si piscine visible sur la photo mais absente du plan cadastral
  *   solar: boolean,
  *   solar_confidence: number (0-1),
- *   image_base64: string   // pour vérification visuelle par l'utilisateur
+ *   image_base64: string,                // photo aérienne, pour vérification visuelle par l'utilisateur
+ *   plan_cadastral_base64: string | null // plan cadastral DGFiP (null si indisponible pour cette commune)
  * }
  */
 app.post('/api/analyze', async (req, res) => {
-    const { parcelles } = req.body;
+    const { parcelles, codeInsee } = req.body;
 
     if (!Array.isArray(parcelles) || parcelles.length === 0) {
         return res.status(400).json({ error: 'Au moins une parcelle est requise.' });
@@ -371,23 +423,75 @@ app.post('/api/analyze', async (req, res) => {
         const bbox = bboxAvecMarge(parcelles);
         const WIDTH = 800, HEIGHT = 800;
 
-        const satelliteBuffer = await fetchSatelliteImageBuffer(bbox, WIDTH, HEIGHT);
+        // Les deux images sont récupérées en parallèle (services différents, indépendants)
+        // pour ne pas doubler le temps d'attente perçu par l'utilisateur.
+        const [satelliteBuffer, planCadastralBuffer] = await Promise.all([
+            fetchSatelliteImageBuffer(bbox, WIDTH, HEIGHT),
+            fetchPlanCadastralBuffer(bbox, codeInsee, WIDTH, HEIGHT)
+        ]);
+
         if (!satelliteBuffer) {
             return res.status(502).json({ error: "Impossible de récupérer l'image satellite IGN pour cette zone." });
         }
+        // Le plan cadastral est un bonus : son absence (commune non vectorisée, service indisponible)
+        // ne doit jamais empêcher l'analyse photo de se faire normalement.
 
         const imageAvecContour = await genererImageAvecContour(satelliteBuffer, parcelles, bbox, WIDTH, HEIGHT);
+        const planCadastralAvecContour = planCadastralBuffer
+            ? await genererImageAvecContour(planCadastralBuffer, parcelles, bbox, WIDTH, HEIGHT)
+            : null;
 
-        const systemInstruction = `Tu es un expert en photo-interprétation de vues aériennes cadastrales. ` +
-            `Le contour en pointillés rouges délimite STRICTEMENT la parcelle (ou le groupe de parcelles) à analyser. ` +
-            `Ignore tout équipement situé hors de ce contour, même s'il est visible sur l'image. ` +
-            `Réponds UNIQUEMENT par un objet JSON valide, sans aucun texte avant ou après, sans bloc de code markdown. ` +
-            `Le JSON doit contenir exactement ces clés : ` +
-            `{"pool": boolean, "pool_confidence": number entre 0 et 1, "solar": boolean, "solar_confidence": number entre 0 et 1}. ` +
-            `pool = présence d'un bassin de piscine (eau visible, structure de bassin) à l'intérieur du contour. ` +
-            `solar = présence de panneaux photovoltaïques sur une toiture ou au sol à l'intérieur du contour. ` +
-            `confidence = ta confiance dans le verdict (0 = incertain, 1 = certain), tenant compte de la résolution image, ` +
-            `des ombres, de la qualité de la vue et de toute ambiguïté visuelle. Ne donne aucune explication textuelle.`;
+        const systemInstruction = planCadastralAvecContour
+            ? `Tu es un expert en photo-interprétation de vues aériennes cadastrales. ` +
+              `On te donne DEUX images de la même zone géographique, cadrées et superposables : ` +
+              `(1) une photo aérienne réelle (vue satellite), (2) le plan cadastral officiel (DGFiP), ` +
+              `un dessin schématique (pas une photo) où chaque parcelle est délimitée par un trait noir. ` +
+              `Sur ce plan cadastral : les bâtiments déjà recensés sont remplis en ORANGE/JAUNE ; les ` +
+              `piscines déjà recensées par l'administration fiscale sont remplies en BLEU (couleur ` +
+              `distincte de l'orange/jaune des bâtiments — ne confonds pas les deux). ` +
+              `Le contour en pointillés rouges délimite STRICTEMENT, sur chaque image, la parcelle ` +
+              `(ou le groupe de parcelles) à analyser. Ignore tout équipement situé hors de ce contour, ` +
+              `même s'il est visible sur l'image. ` +
+              `Avant de répondre, raisonne en deux temps (sans écrire ce raisonnement dans ta réponse) : ` +
+              `1) Sur l'image 1 (photo aérienne), y a-t-il un bassin de piscine à l'intérieur du contour rouge ? ` +
+              `2) Si oui, sur l'image 2 (plan cadastral), à ce même emplacement précis à l'intérieur du ` +
+              `contour rouge, vois-tu une forme remplie en BLEU (piscine recensée) ? Si tu ne vois QUE de ` +
+              `l'orange/jaune (bâtiment) ou rien du tout à cet emplacement, alors aucune piscine n'est ` +
+              `recensée sur le plan cadastral. ` +
+              `Réponds UNIQUEMENT par un objet JSON valide, sans aucun texte avant ou après, sans bloc de code markdown. ` +
+              `Le JSON doit contenir exactement ces clés : ` +
+              `{"pool": boolean, "pool_confidence": number entre 0 et 1, "pool_non_declaree": boolean, "solar": boolean, "solar_confidence": number entre 0 et 1}. ` +
+              `pool = présence d'un bassin de piscine (eau visible, structure de bassin) sur la photo aérienne, à l'intérieur du contour. ` +
+              `pool_non_declaree = true UNIQUEMENT si pool est true ET qu'aucune forme BLEUE de piscine n'apparaît à cet ` +
+              `emplacement précis sur le plan cadastral (étape 2 du raisonnement ci-dessus) ; ` +
+              `false si pool est false, ou si une forme bleue de piscine est bien visible au même endroit sur le plan cadastral. ` +
+              `Cette clé est TOUJOURS présente dans ta réponse JSON, jamais omise. ` +
+              `solar = présence de panneaux photovoltaïques sur une toiture ou au sol à l'intérieur du contour. ` +
+              `confidence = ta confiance dans le verdict (0 = incertain, 1 = certain), tenant compte de la résolution image, ` +
+              `des ombres, de la qualité de la vue et de toute ambiguïté visuelle. Ne donne aucune explication textuelle.`
+            : `Tu es un expert en photo-interprétation de vues aériennes cadastrales. ` +
+              `Le contour en pointillés rouges délimite STRICTEMENT la parcelle (ou le groupe de parcelles) à analyser. ` +
+              `Ignore tout équipement situé hors de ce contour, même s'il est visible sur l'image. ` +
+              `Réponds UNIQUEMENT par un objet JSON valide, sans aucun texte avant ou après, sans bloc de code markdown. ` +
+              `Le JSON doit contenir exactement ces clés : ` +
+              `{"pool": boolean, "pool_confidence": number entre 0 et 1, "solar": boolean, "solar_confidence": number entre 0 et 1}. ` +
+              `pool = présence d'un bassin de piscine (eau visible, structure de bassin) à l'intérieur du contour. ` +
+              `solar = présence de panneaux photovoltaïques sur une toiture ou au sol à l'intérieur du contour. ` +
+              `confidence = ta confiance dans le verdict (0 = incertain, 1 = certain), tenant compte de la résolution image, ` +
+              `des ombres, de la qualité de la vue et de toute ambiguïté visuelle. Ne donne aucune explication textuelle.`;
+
+        const userContent = [
+            { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageAvecContour.toString('base64') } }
+        ];
+        if (planCadastralAvecContour) {
+            userContent.push(
+                { type: 'image', source: { type: 'base64', media_type: 'image/png', data: planCadastralAvecContour.toString('base64') } },
+                { type: 'text', text: "Image 1 : photo aérienne. Image 2 : plan cadastral officiel (piscines recensées en bleu). " +
+                    "Analyse la parcelle délimitée par le contour rouge sur les deux images et compare-les. Réponds en JSON strict." }
+            );
+        } else {
+            userContent.push({ type: 'text', text: 'Analyse la parcelle délimitée par le contour rouge. Réponds en JSON strict.' });
+        }
 
         const response = await fetch('https://api.anthropic.com/v1/messages', {
             method: 'POST',
@@ -403,10 +507,7 @@ app.post('/api/analyze', async (req, res) => {
                 system: systemInstruction,
                 messages: [{
                     role: 'user',
-                    content: [
-                        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageAvecContour.toString('base64') } },
-                        { type: 'text', text: 'Analyse la parcelle délimitée par le contour rouge. Réponds en JSON strict.' }
-                    ]
+                    content: userContent
                 }]
             })
         });
@@ -421,9 +522,13 @@ app.post('/api/analyze', async (req, res) => {
         return res.json({
             pool: !!parsed.pool,
             pool_confidence: typeof parsed.pool_confidence === 'number' ? parsed.pool_confidence : null,
+            // null (et non false) quand on n'a pas pu comparer avec un plan cadastral : on ne
+            // veut pas affirmer "non déclarée" sans avoir réellement vu le plan cadastral.
+            pool_non_declaree: planCadastralAvecContour ? !!parsed.pool_non_declaree : null,
             solar: !!parsed.solar,
             solar_confidence: typeof parsed.solar_confidence === 'number' ? parsed.solar_confidence : null,
-            image_base64: imageAvecContour.toString('base64')
+            image_base64: imageAvecContour.toString('base64'),
+            plan_cadastral_base64: planCadastralAvecContour ? planCadastralAvecContour.toString('base64') : null
         });
     } catch (error) {
         res.status(500).json({ error: 'Erreur analyse.', details: error.message });
